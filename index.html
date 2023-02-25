@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>My first three.js app</title>
+  <style>
+    body {
+      margin: 0;
+    }
+  </style>
+</head>
+
+<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three/examples/jsm/"
+    }
+  }
+</script>
+
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    const boat_radius = 1.2;
+
+
+    const segment_length = 15;
+    const segment_width = segment_length * 0.7;
+    const max_bend_angle = 1;
+    const rate_no_change = 0.1;
+    const rate_big_change = 0.3;
+
+
+    // returns true if the line from (a,b)->(c,d) does intersect with (p,q)->(r,s)
+    function intersects(a1, a2, b1, b2) {
+
+      const a = a1.x; const b = a1.y; const c = a2.x; const d = a2.y;
+      const p = b1.x; const q = b1.y; const r = b2.x; const s = b2.y;
+
+      var det, gamma, lambda;
+      det = (c - a) * (s - q) - (r - p) * (d - b);
+      if (det === 0) {
+        return false;
+      } else {
+        lambda = ((s - q) * (r - a) + (p - r) * (s - b)) / det;
+        gamma = ((b - d) * (r - a) + (c - a) * (s - b)) / det;
+        return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+      }
+    };
+
+    function point_inside_trigon(s, a, b, c) {
+      const as_x = s.x - a.x;
+      const as_y = s.y - a.y;
+      const s_ab = (b.x - a.x) * as_y - (b.y - a.y) * as_x > 0;
+
+      if ((c.x - a.x) * as_y - (c.y - a.y) * as_x > 0 == s_ab)
+        return false;
+      if ((c.x - b.x) * (s.y - b.y) - (c.y - b.y) * (s.x - b.x) > 0 != s_ab)
+        return false;
+      return true;
+    }
+
+
+    class RiverSegment {
+      constructor(lastSegment) {
+        this.id = lastSegment ? lastSegment.id + 1 : 0;
+        this.current = lastSegment ? (lastSegment.current + random()) / 2 : 0.1;
+
+        this.direction = lastSegment ? (lastSegment.direction + this.directionChange()) : 0;
+
+        this.up = lastSegment ? lastSegment.down : { x: -5, y: 0 };
+        this.updx = { x: this.up.x - sin(this.direction) * segment_width, y: this.up.y + cos(this.direction) * segment_width };
+        this.upsx = { x: this.up.x + sin(this.direction) * segment_width, y: this.up.y - cos(this.direction) * segment_width };
+
+        this.down = { x: this.up.x + cos(this.direction) * segment_length, y: this.up.y + sin(this.direction) * segment_length };
+        this.downdx = { x: this.down.x - sin(this.direction) * segment_width, y: this.down.y + cos(this.direction) * segment_width };
+        this.downsx = { x: this.down.x + sin(this.direction) * segment_width, y: this.down.y - cos(this.direction) * segment_width };
+
+      }
+      surrounds(aBoat) {
+
+        const aPoint = { x: aBoat.position.x, y: aBoat.position.z };
+        return point_inside_trigon(aPoint, this.updx, this.downsx, this.upsx) || point_inside_trigon(aPoint, this.updx, this.downdx, this.downsx);
+      }
+
+      directionChange() {
+        if (random() < rate_no_change) { return 0; }
+
+        if (random() < rate_big_change) { return ((random() > 0.5 ? 1 : -1) * max_bend_angle); }
+        return (random() - 0.5) * max_bend_angle;
+
+      }
+      isInTheWayOf(aSegment) {
+
+        return intersects(this.updx, this.downdx, aSegment.updx, aSegment.downdx) ||
+          intersects(this.updx, this.downdx, aSegment.upsx, aSegment.downsx) ||
+          intersects(this.upsx, this.downsx, aSegment.updx, aSegment.downdx) ||
+          intersects(this.upsx, this.downsx, aSegment.upsx, aSegment.downsx);
+      }
+
+    }
+
+    function cos(a) { return Math.cos(a); }
+    function sin(a) { return Math.sin(a); }
+    function random(real) { return Math.random(real); }
+
+    function generateRiver(number_segments) {
+      let river = try_generateRiver(number_segments);
+      while (!river) {
+        console.log("river failed")
+        river = try_generateRiver(number_segments);
+      }
+      return river;
+
+    }
+
+    function try_generateRiver(number_segments) {
+
+      let segments = [];
+
+      segments.push(new RiverSegment());
+
+      let lastSegment = segments[0];
+      let retryCount = 100;
+      newSegment: while (segments.length < number_segments && retryCount) {
+        //console.log(segments.length, retryCount);
+        let newSegment = new RiverSegment(lastSegment);
+        //anneal
+        const dxx = (newSegment.updx.x + lastSegment.downdx.x) / 2;
+        const dxy = (newSegment.updx.y + lastSegment.downdx.y) / 2;
+        newSegment.updx.x = dxx; lastSegment.downdx.x = dxx;
+        newSegment.updx.y = dxy; lastSegment.downdx.y = dxy;
+        const sxx = (newSegment.upsx.x + lastSegment.downsx.x) / 2;
+        const sxy = (newSegment.upsx.y + lastSegment.downsx.y) / 2;
+        newSegment.upsx.x = sxx; lastSegment.downsx.x = sxx;
+        newSegment.upsx.y = sxy; lastSegment.downsx.y = sxy;
+
+        //continue if it does not fit, max 100 times
+
+        for (let i = 0; segments[i] != lastSegment; i++) {
+          let testSegment = segments[i];
+
+          if (testSegment.isInTheWayOf(newSegment)) {
+            // console.log("collision " + i);
+            retryCount--;
+            continue newSegment;
+          }
+        }
+
+        segments.push(newSegment);
+        retryCount = 100;
+        lastSegment = newSegment;
+
+      }
+
+      if (retryCount == 0) {
+        console.log("failed all rivergen attempts");
+        return null;
+      }
+
+
+      return segments;
+
+    };
+
+
+
+
+
+
+    /*
+       ################### MAIN LOOP #################
+    */
+
+
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    var boatMesh = null;
+    const loader = new GLTFLoader();
+
+    let boat = { x: 0, y: 0, dx: 0, dy: 0, direction: 0, mesh: null };
+
+    loader.load(
+      // resource URL
+      'models/boats/watercraftPack_029.gltf',
+      // 'models/nature/bed.glb',
+      // called when the resource is loaded
+      function (gltf) {
+        boatMesh = gltf.scene;
+
+        scene.add(gltf.scene);
+        boat.mesh = boatMesh;
+      },
+      // called while loading is progressing
+      function (xhr) {
+
+        console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+
+      },
+      // called when loading has errors
+      function (error) {
+
+        console.log('An error happened');
+
+      }
+    );
+
+    const renderer = new THREE.WebGLRenderer();
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    let plane = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.MeshBasicMaterial({ color: 0x7CFC00 }));
+    plane.lookAt(0, 1, 0);
+    plane.position.y -= 1;
+    scene.add(plane);
+
+    // const sphere = new THREE.Mesh(new THREE.SphereGeometry(1.2, 32, 16), new THREE.MeshBasicMaterial({ color: 0xf00f0 }));
+    // scene.add(sphere);
+
+    const sailShape = new THREE.Shape();
+    sailShape.moveTo(0, 1.5);
+    sailShape.lineTo(0, 6);
+    sailShape.lineTo(3, 1.5);
+    sailShape.lineTo(0, 1.5);
+
+    var sail = new THREE.Mesh(
+      new THREE.ShapeGeometry(sailShape),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    );
+    scene.add(sail);
+    sail.rotation.y += Math.PI / 2;
+
+    let ambientLight = new THREE.AmbientLight(0xffffff);
+    ambientLight.intensity = 0.2;
+    scene.add(ambientLight);
+
+
+    // let spotLight = new THREE.SpotLight(0xffffff);
+    // spotLight.position.set(30, 30, 100);
+
+    // spotLight.angle = 0.18;
+    // spotLight.penumbra = 1;
+    // spotLight.intensity = 0.6;
+    // scene.add(spotLight);
+
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x06aC00, 0.5));
+
+    camera.position.z = 20;
+    camera.position.y = 30;
+
+    camera.lookAt(0, 0, 0);
+    const river = generateRiver(10);
+
+    const constructionMaterial = new THREE.LineBasicMaterial({ color: 0x0000f0, linewidth: 10 });
+    const riverMaterial = new THREE.MeshBasicMaterial({ color: 0x3050f0 });
+
+
+    river.forEach(
+      (segment) => {
+
+        const height_grid = 0.011;
+
+        const updown_geometry = new THREE.BufferGeometry().setFromPoints(
+          [new THREE.Vector3(segment.up.x, height_grid, segment.up.y), new THREE.Vector3(segment.down.x, height_grid, segment.down.y)]);
+        scene.add(new THREE.Line(updown_geometry, constructionMaterial));
+        const up_geometry = new THREE.BufferGeometry().setFromPoints(
+          [new THREE.Vector3(segment.upsx.x, height_grid, segment.upsx.y), new THREE.Vector3(segment.updx.x, height_grid, segment.updx.y)]);
+        scene.add(new THREE.Line(up_geometry, constructionMaterial));
+
+        const height_river = 0.01;
+
+        const riverGeometry = new THREE.BufferGeometry().setFromPoints(
+          [
+            new THREE.Vector3(segment.updx.x, height_grid, segment.updx.y),
+            new THREE.Vector3(segment.downdx.x, height_grid, segment.downdx.y),
+            new THREE.Vector3(segment.downsx.x, height_grid, segment.downsx.y),
+
+            new THREE.Vector3(segment.downsx.x, height_grid, segment.downsx.y),
+            new THREE.Vector3(segment.upsx.x, height_grid, segment.upsx.y),
+            new THREE.Vector3(segment.updx.x, height_grid, segment.updx.y),
+
+          ]
+        );
+
+
+        scene.add(new THREE.Mesh(riverGeometry, riverMaterial));
+
+      }
+    );
+
+    //make mesh from river segments triangles
+
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (!boatMesh) { return }
+
+      let inside = false;
+      var i;
+      for (i = 0; i < river.length && !inside; i++) {
+        inside = river[i].surrounds(boatMesh);
+        if (inside) {
+
+          //calculate speed
+
+
+          let dx = boat.dx;
+          let dy = boat.dy;
+
+          let currentTargetSpeedX = cos(river[i].direction) * river[i].current;
+          let currentTargetSpeedY = sin(river[i].direction) * river[i].current;
+          let windTargetSpeedX = 0;
+          let windTargetSpeedY = 0;
+          const fakefactor = 0.02;
+
+          boat.dx = (1 - fakefactor) * boat.dx + fakefactor * (currentTargetSpeedX + windTargetSpeedX);
+          boat.dy = (1 - fakefactor) * boat.dy + fakefactor * (currentTargetSpeedY + windTargetSpeedY);
+          boat.x += boat.dx;
+          boat.y += boat.dy;
+
+
+          boatMesh.position.x = boat.x;
+          boatMesh.position.z = boat.y;
+          //current!
+        };
+
+      }
+
+
+      if (!inside) {
+        //detach controls
+        // console.log(boatMesh.position.x, boatMesh.position.y);
+        // console.log(river);
+        console.log("crash");
+      }
+
+      // boat.rotation.x += 0.01;
+      boatMesh.rotation.y += 0.01;
+      sail.rotation.y += 0.01;
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+
+
+
+  </script>
+</body>
+
+</html>
